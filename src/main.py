@@ -22,7 +22,7 @@ settings = get_settings()
 
 # 配置日志
 logging.basicConfig(
-    level=getattr(logging, settings.log_level),
+    level=getattr(logging, settings.logging.level),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -41,8 +41,8 @@ async def lifespan(app: FastAPI):
     
     # 检查Redis连接
     if not check_redis_connection():
-        logger.error("❌ Redis连接失败，请检查配置")
-        raise RuntimeError("Redis连接失败")
+        logger.warning("⚠️ Redis连接失败，缓存功能将不可用")
+        # Redis失败不阻止应用启动
     
     # 初始化数据库
     try:
@@ -169,11 +169,17 @@ async def app_info():
         "name": settings.app_name,
         "version": settings.app_version,
         "debug": settings.debug,
-        "environment": "development" if settings.debug else "production",
+        "environment": settings.environment,
         "features": {
             "llm_enabled": bool(settings.llm.openai_api_key or settings.llm.deepseek_api_key),
-            "trading_mode": settings.trading.trading_mode,
-            "metrics_enabled": settings.enable_metrics
+            "data_sources": {
+                "tushare": bool(settings.data_source.tushare_token),
+                "yahoo_finance": settings.data_source.yahoo_finance_enabled
+            },
+            "trading": {
+                "max_position_size": settings.trading.max_position_size,
+                "max_daily_loss": settings.trading.max_daily_loss
+            }
         }
     }
 
@@ -219,8 +225,8 @@ if __name__ == "__main__":
     uvicorn.run(
         "src.main:app",
         host="0.0.0.0",
-        port=settings.api_port,
+        port=8000,  # 使用固定端口
         reload=settings.debug,
-        log_level=settings.log_level.lower(),
+        log_level=settings.logging.level.lower(),
         access_log=settings.debug
     ) 
