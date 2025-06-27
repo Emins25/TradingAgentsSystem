@@ -1,0 +1,55 @@
+# Web框架
+fastapi
+uvicorn[standard]
+
+# 数据库
+sqlalchemy
+alembic
+psycopg2-binary
+
+# 缓存
+redis
+
+# 数据处理
+pandas
+numpy
+
+# LLM集成
+openai
+anthropic
+
+# 数据源
+tushare
+yfinance
+requests
+
+# 配置管理
+pydantic
+pydantic-settings
+python-dotenv
+
+# 日志和监控
+loguru
+prometheus-client
+
+# 测试
+pytest
+pytest-asyncio
+pytest-cov
+
+# 工具
+click
+python-multipart
+httpx
+
+# 异步任务
+celery
+kombu
+
+# 安全
+passlib[bcrypt]
+python-jose[cryptography]
+
+# 其他工具
+typing-extensions
+python-dateutil 

@@ -1,0 +1,230 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库
+  db:
+    image: postgres:15
+    container_name: tradingagents_db
+    environment:
+      POSTGRES_DB: trading_agents
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/schemas:/docker-entrypoint-initdb.d
+    networks:
+      - tradingagents_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis缓存
+  redis:
+    image: redis:7-alpine
+    container_name: tradingagents_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - tradingagents_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # TradingAgents API服务
+  api:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradingagents_api
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/trading_agents
+      - REDIS_URL=redis://redis:6379/0
+      - DEBUG=True
+      - LOG_LEVEL=INFO
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./.env:/app/.env
+    networks:
+      - tradingagents_network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Web前端（开发环境）
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.dev
+    container_name: tradingagents_web
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+    volumes:
+      - ./web/src:/app/src
+      - ./web/public:/app/public
+    networks:
+      - tradingagents_network
+    depends_on:
+      - api
+
+  # Nginx反向代理（可选）
+  nginx:
+    image: nginx:alpine
+    container_name: tradingagents_nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf
+      - ./deploy/nginx/sites:/etc/nginx/sites-available
+    depends_on:
+      - api
+      - web
+    networks:
+      - tradingagents_network
+    profiles:
+      - production
+
+  # Celery任务队列（后台任务）
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradingagents_celery
+    command: celery -A src.background.scheduler worker --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/trading_agents
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./.env:/app/.env
+    networks:
+      - tradingagents_network
+    restart: unless-stopped
+
+  # Celery Beat调度器
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradingagents_celery_beat
+    command: celery -A src.background.scheduler beat --loglevel=info
+    environment:
+      - DATABASE_URL=postgresql://postgres:password@db:5432/trading_agents
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./.env:/app/.env
+    networks:
+      - tradingagents_network
+    restart: unless-stopped
+
+  # Flower - Celery监控工具
+  flower:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tradingagents_flower
+    command: celery -A src.background.scheduler flower --port=5555
+    ports:
+      - "5555:5555"
+    environment:
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    depends_on:
+      - redis
+    networks:
+      - tradingagents_network
+    profiles:
+      - monitoring
+
+  # Prometheus监控
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: tradingagents_prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./deploy/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - tradingagents_network
+    profiles:
+      - monitoring
+
+  # Grafana可视化
+  grafana:
+    image: grafana/grafana:latest
+    container_name: tradingagents_grafana
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning
+    networks:
+      - tradingagents_network
+    depends_on:
+      - prometheus
+    profiles:
+      - monitoring
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  tradingagents_network:
+    driver: bridge
+    name: tradingagents_network
